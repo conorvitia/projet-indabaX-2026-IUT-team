@@ -33,12 +33,33 @@ try:
     #on reset l'index 
     
     print(f"le reste des valeurs manquante est {df_propre.isnull().sum()}")   
-   
-    #passons au feature engineering
-    df_propre['temp_hier'] = df_propre.groupby('city')['temperature_2m_mean'].shift(1)
-    print(df_propre['temp_hier'].head())
     
-    #df_propre['pollution_hier'] = df_propre.groupby('city')[''].shift(1)
+    df_propre['pm25_proxy'] = (0.3 * df_propre['temperature_2m_mean'] + 
+                           0.2 * df_propre['shortwave_radiation_sum']).clip(lower=0)
+    #passons au feature engineering
+    
+    # 2. MÉMOIRE (Shift) (les lags)
+    df_propre['pollution_hier'] = df_propre.groupby('city')['pm25_proxy'].shift(1)
+    #enlevons les nan sur la colonne
+    df_propre['pollution_hier']=df_propre.groupby('city')['pollution_hier'].transform(lambda x: x.ffill().bfill())
+    
+    df_propre['temp_hier'] = df_propre.groupby('city')['temperature_2m_mean'].shift(1)
+    #tendance sur les 3 dernirs jours
+    df_propre['moyenne_mobile_3j'] = df_propre.groupby('city')['pm25_proxy'].transform(lambda x: x.rolling(window=3).mean())
+    # 4. ANOMALIE (Ecart à la moyenne de la ville)
+    moyenne_par_ville = df_propre.groupby('city')['temperature_2m_max'].transform('mean')
+    df_propre['temp_anomalie'] = df_propre['temperature_2m_max'] - moyenne_par_ville
+    
+    print("Feature Engineering terminé avec succès !")
+    print(df_propre[['city', 'time', 'pm25_proxy', 'pollution_hier', 'temp_anomalie']].head())
     
 except  Exception as e :
     print(f"Erreur à ce niveau {e}")
+    
+    
+ 
+
+
+
+
+
