@@ -455,7 +455,7 @@ wind = st.sidebar.slider("Wind Speed (km/h)", 0.0, 50.0, float(wind) if wind is 
 radiation = st.sidebar.slider("Solar Radiation (MJ/m²)", 0.0, 50.0, float(radiation) if radiation is not None else 15.0, key="radiation_slider_val", on_change=sync_radiation)
 
 # button
-if st.sidebar.button("Use Real-Time Weather & Predict"):
+if st.sidebar.button("The weather conditions and PM2.5 values you see are realtime"):
     weather = get_real_weather(lat, lon)
 
     if weather is not None:
