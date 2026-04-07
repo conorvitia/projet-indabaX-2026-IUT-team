@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import streamlit.components.v1 as components
 import numpy as np
 import joblib
 import plotly.express as px
@@ -465,6 +466,15 @@ if st.sidebar.button("Use Real-Time Weather & Predict"):
         st.session_state["rain"] = weather["rain"]
         st.session_state["radiation"] = weather["radiation"]
 
+        # --- FIXED: Update slider widget states so the sliders visually move ---
+        st.session_state["temp_slider_val"] = weather["temperature"]
+        st.session_state["temp_max_slider_val"] = weather["temperature_max"]
+        st.session_state["temp_min_slider_val"] = weather["temperature_min"]
+        st.session_state["wind_slider_val"] = weather["wind"]
+        st.session_state["rain_slider_val"] = weather["rain"]
+        st.session_state["radiation_slider_val"] = weather["radiation"]
+        # ----------------------------------------------------------------
+
         st.sidebar.success("Live weather loaded & prediction updated!")
         st.rerun()
     else:
@@ -524,7 +534,7 @@ if all(k in st.session_state for k in ["temp", "wind", "rain", "radiation"]):
 
     # Check if API is working
     api_working = st.session_state.get("weather_api_working", True)
-    api_badge = "🟢 Real-Time" if api_working else "� Offline"
+    api_badge = "🟢 Real-Time" if api_working else "🔴 Offline"
     api_color = "#22c55e" if api_working else "#ef4444"
 
     temp_display = "--" if st.session_state.get("temp") is None else f"{st.session_state.get('temp'):.1f}"
@@ -711,6 +721,7 @@ fig_gauge.update_layout(height=300)
 
 st.plotly_chart(fig_gauge, use_container_width=True)
 
+
 # ── Alert Box (Professional) ───────────────────────────────
 st.markdown('<div class="section-title">Air Quality Status</div>', unsafe_allow_html=True)
 
@@ -745,6 +756,99 @@ else:
               "Health risk detected. Avoid exposure.",
               "🔴")
 
+
+
+# ── Confusion Matrix (Model Performance) ─────────────────────
+st.markdown('<div class="section-title">Model Performance (Confusion Matrix)</div>', unsafe_allow_html=True)
+
+try:
+    from sklearn.metrics import confusion_matrix
+    import plotly.figure_factory as ff
+
+    # We use a sample of historical data to evaluate the model performance
+    # (Using the last 500 rows to keep it fast and relevant)
+    sample_df = df.sample(n=min(500, len(df)), random_state=42).copy()
+
+    # 1. Prepare Features (Must match training features)
+    # Using the same feature engineering as the prediction engine
+    sample_df['temp_amplitude'] = sample_df['temperature_2m_max'] - sample_df['temperature_2m_min']
+    sample_df['sunshine_ratio'] = sample_df['sunshine_duration'] / (24 * 3600)
+    sample_df['is_no_wind'] = (sample_df['wind_speed_10m_max'] < 1).astype(int)
+    sample_df['is_no_rain'] = (sample_df['precipitation_sum'] == 0).astype(int)
+    sample_df['is_dry_season'] = sample_df['month'].isin([12,1,2]).astype(int)
+    
+    sample_df['month_sin'] = np.sin(2 * np.pi * sample_df['month'] / 12)
+    sample_df['month_cos'] = np.cos(2 * np.pi * sample_df['month'] / 12)
+
+    # Select feature columns
+    feature_cols = [
+        'temperature_2m_mean', 'temperature_2m_max', 'temperature_2m_min',
+        'precipitation_sum', 'wind_speed_10m_max', 'wind_gusts_10m_max',
+        'shortwave_radiation_sum', 'et0_fao_evapotranspiration', 'sunshine_ratio',
+        'temp_amplitude', 'is_no_wind', 'is_no_rain', 'is_dry_season',
+        'month_sin', 'month_cos', 'day_of_year',
+        'temp_lag1', 'temp_lag7', 'wind_lag1', 'temp_roll7',
+        'latitude', 'longitude', 'region_enc', 'city_enc'
+    ]
+    
+    # Handle missing lag columns for historical data if they don't exist
+    for col in ['temp_lag1', 'temp_lag7', 'wind_lag1', 'temp_roll7']:
+        if col not in sample_df.columns:
+            sample_df[col] = sample_df['temperature_2m_mean'] # Fallback
+            
+    # Get encoded values safely
+    if 'city_enc' not in sample_df.columns: sample_df['city_enc'] = 0
+    if 'region_enc' not in sample_df.columns: sample_df['region_enc'] = 0
+
+    X_test = sample_df[feature_cols].fillna(0)
+    
+    # 2. Make Predictions
+    y_pred = model.predict(X_test)
+    
+    # 3. Binning into Categories (Good, Moderate, High, Unhealthy)
+    # We use the 'pm25_proxy' as the 'Ground Truth' for this demonstration
+    def categorize_pm25(val):
+        if val <= 10: return 0  # Good
+        if val <= 25: return 1  # Moderate
+        if val <= 50: return 2  # High
+        return 3                # Unhealthy
+
+    y_true_classes = sample_df['pm25_proxy'].apply(categorize_pm25)
+    y_pred_classes = pd.Series(y_pred).apply(categorize_pm25)
+    
+    # 4. Compute Confusion Matrix
+    cm = confusion_matrix(y_true_classes, y_pred_classes, labels=[0, 1, 2, 3])
+    
+    # 5. Plot using Plotly
+    x = ['Good', 'Moderate', 'High', 'Unhealthy']
+    y = ['Good', 'Moderate', 'High', 'Unhealthy']
+    
+    fig_cm = ff.create_annotated_heatmap(
+        z=cm,
+        x=x,
+        y=y,
+        colorscale='Greens',
+        showscale=True,
+        reversescale=True
+    )
+    
+    fig_cm.update_layout(
+        title="True vs Predicted Categories",
+        xaxis_title="Predicted Label",
+        yaxis_title="True Label",
+        height=400,
+        margin=dict(l=50, r=50, t=50, b=50)
+    )
+    
+    st.plotly_chart(fig_cm, use_container_width=True)
+    st.caption("This matrix shows how well the model performed on the last 500 records of historical data.")
+
+except ImportError:
+    st.warning("Scikit-learn not installed. Cannot display Confusion Matrix. Run: `pip install scikit-learn`")
+except Exception as e:
+    st.error(f"Could not generate Confusion Matrix: {e}")
+
+
 # ── Analysis Section ───────────────────────────────────────
 st.markdown('<div class="section-title">Climate vs Air Quality</div>', unsafe_allow_html=True)
 
@@ -774,8 +878,7 @@ fig2 = px.scatter(
 st.plotly_chart(fig2, use_container_width=True)
 
 
-
-# ── 4-Day PM2.5 Forecast (Model Prediction) ────────────────
+# ── 4-Day PM2.5 Forecast (Styled Cards) ─────────────────────
 
 if st.session_state.get("show_pm25_forecast", False):
     st.markdown('<div class="section-title">4-Day PM2.5 Forecast (AI Predictions)</div>', unsafe_allow_html=True)
@@ -783,34 +886,114 @@ if st.session_state.get("show_pm25_forecast", False):
     predictions = st.session_state.get("pm25_predictions", [])
     
     if predictions:
-        # Create DataFrame for visualization
+        # Create DataFrame for the Line Chart
         pred_df = pd.DataFrame(predictions)
         
-        # Create line chart
+        # 1. Line Chart
         fig_pm25_forecast = px.line(
             pred_df,
             x='date',
             y='pm25',
             markers=True,
-            title="PM2.5 Forecast for Next 4 Days (Including Today, Based on Weather Forecast)",
+            title="PM2.5 Forecast Trend",
             labels={'pm25': 'PM2.5 (µg/m³)', 'date': 'Date'},
             line_shape='linear'
         )
         
-        # Color code the markers
+        # Color code the markers for the chart
         colors = []
         for pm25 in pred_df['pm25']:
-            if pm25 <= 10:
-                colors.append('#2ecc71')  # Green
-            elif pm25 <= 25:
-                colors.append('#f1c40f')  # Yellow
-            elif pm25 <= 50:
-                colors.append('#e67e22')  # Orange
-            else:
-                colors.append('#e74c3c')  # Red
+            if pm25 <= 10: colors.append('#2ecc71')  # Green
+            elif pm25 <= 25: colors.append('#f1c40f')  # Yellow
+            elif pm25 <= 50: colors.append('#e67e22')  # Orange
+            else: colors.append('#e74c3c')  # Red
         
         fig_pm25_forecast.update_traces(marker=dict(color=colors, size=12))
         fig_pm25_forecast.update_layout(height=400)
-        
         st.plotly_chart(fig_pm25_forecast, use_container_width=True)
         
+        # 2. Styled Cards (Mimicking Live Weather Card)
+        st.markdown("### Detailed Daily Forecast")
+        
+        # Create columns for the cards
+        cols = st.columns(len(predictions))
+        
+        for i, (col, pred) in enumerate(zip(cols, predictions)):
+            pm25 = pred['pm25']
+            day_name = pred['day']
+            date = pred['date']
+            temp = pred['temperature']
+            wind = pred['wind']
+            rain = pred['rain']
+            
+            # Determine AQI Status and Colors
+            if pm25 <= 10:
+                status = "Good"
+                icon = "🟢"
+                bg_color = "#e8f8f5"       
+                border_color = "#2ecc71"   
+                text_color = "#14532d"
+            elif pm25 <= 25:
+                status = "Moderate"
+                icon = "🟡"
+                bg_color = "#fef9e7"       
+                border_color = "#f1c40f"   
+                text_color = "#713f12"
+            elif pm25 <= 50:
+                status = "High"
+                icon = "🟠"
+                bg_color = "#fef5e7"       
+                border_color = "#e67e22"   
+                text_color = "#7c2d12"
+            else:
+                status = "Unhealthy"
+                icon = "🔴"
+                bg_color = "#fdecea"       
+                border_color = "#e74c3c"   
+                text_color = "#7f1d1d"
+            
+            # HTML String
+            html_code = f"""
+            <div style="
+                padding:20px;
+                border-radius:16px;
+                background-color:{bg_color};
+                border-left:8px solid {border_color};
+                box-shadow:0 4px 6px rgba(0,0,0,0.05);
+                font-family: sans-serif;
+                height: 100%;
+                box-sizing: border-box;
+            ">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
+                    <div style="font-size:16px; font-weight:700; color:{text_color};">{day_name}</div>
+                    <div style="padding:4px 10px; background-color:{border_color}30; color:{border_color}; border-radius:12px; font-size:11px; font-weight:700;">
+                        {icon} {status}
+                    </div>
+                </div>
+                
+                <div style="font-size:12px; color:#666; margin-bottom:15px;">{date}</div>
+
+                <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px;">
+                    <div style="background-color:rgba(255,255,255,0.6); padding:10px; border-radius:8px; text-align:center;">
+                        <div style="font-size:10px; color:#555;">PM2.5</div>
+                        <div style="font-size:18px; font-weight:800; color:{border_color};">{pm25:.1f}</div>
+                    </div>
+                    <div style="background-color:rgba(255,255,255,0.6); padding:10px; border-radius:8px; text-align:center;">
+                        <div style="font-size:10px; color:#555;">Temperature</div>
+                        <div style="font-size:14px; font-weight:600;">{temp:.1f}°C</div>
+                    </div>
+                    <div style="background-color:rgba(255,255,255,0.6); padding:10px; border-radius:8px; text-align:center;">
+                        <div style="font-size:10px; color:#555;">Wind</div>
+                        <div style="font-size:14px; font-weight:600;">{wind:.1f} km/h</div>
+                    </div>
+                    <div style="background-color:rgba(255,255,255,0.6); padding:10px; border-radius:8px; text-align:center;">
+                        <div style="font-size:10px; color:#555;">Rain</div>
+                        <div style="font-size:14px; font-weight:600;">{rain:.1f} mm</div>
+                    </div>
+                </div>
+            </div>
+            """
+            
+            # RENDER THE HTML
+            with col:
+                components.html(html_code, height=300, scrolling=False)
